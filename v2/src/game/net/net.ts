@@ -11,7 +11,7 @@
 // tree as long as `init()` only runs in the browser.
 
 import type { DataConnection, Peer as PeerType } from "peerjs";
-import { PREFIX, makeRoomCode } from "./protocol";
+import { PREFIX, makeRoomCode, validateNetMsg, sanitizeName, sanitizeTint } from "./protocol";
 import type { NetMsg, RosterEntry } from "./protocol";
 
 export type { NetMsg, RosterEntry } from "./protocol";
@@ -147,10 +147,11 @@ export class Net {
       this.conns.set(conn.peer, conn);
 
       if (isHostSide) {
+        // Connection metadata is peer-supplied and untrusted — sanitize it.
         const meta = (conn.metadata || {}) as ConnMeta;
         this.peerInfo.set(conn.peer, {
-          name: meta.name || "Phantom",
-          tint: meta.tint || "#d83a2e",
+          name: sanitizeName(meta.name),
+          tint: sanitizeTint(meta.tint),
         });
         this.ev.onStatus("A tomato was summoned.");
       } else {
@@ -166,8 +167,11 @@ export class Net {
 
     conn.on("data", (data: unknown) => {
       if (this.destroyed) return;
-      const msg = data as NetMsg;
-      if (!msg || typeof (msg as { t?: unknown }).t !== "string") return;
+      // Single trust boundary: validate + clamp every inbound packet from this
+      // (untrusted) peer before it reaches the relay or the sim. Malformed or
+      // out-of-bounds payloads are dropped.
+      const msg = validateNetMsg(data);
+      if (!msg) return;
 
       // Host is the hub: relay player snapshots to every *other* client so the
       // mesh is emulated through the host. World/area/sap/etc. are authored by

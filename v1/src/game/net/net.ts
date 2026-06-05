@@ -19,10 +19,14 @@ export interface NetEvents {
 }
 
 export function makeRoomCode(): string {
+  // CSPRNG, not Math.random(): the code is the only thing gating who can join a
+  // session, so it must not be predictable/brute-forceable from PRNG state. The
+  // 32-char alphabet is a power of two, so `% length` carries no modulo bias.
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const buf = new Uint8Array(4);
+  crypto.getRandomValues(buf);
   let s = "";
-  for (let i = 0; i < 4; i++)
-    s += alphabet[Math.floor(Math.random() * alphabet.length)];
+  for (let i = 0; i < 4; i++) s += alphabet[buf[i] % alphabet.length];
   return s;
 }
 

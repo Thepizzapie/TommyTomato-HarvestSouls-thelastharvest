@@ -2243,22 +2243,54 @@ export class Game {
     };
   }
 
+  // Peer payloads are untrusted. Cap/clean a remote display name — control,
+  // zero-width, and bidi code points corrupt the Canvas HUD (and an unbounded
+  // string bloats GC at snapshot cadence). Tested by code point so this source
+  // stays pure ASCII.
+  private sanitizePeerName(v: unknown): string {
+    const raw = String(v ?? "").slice(0, 16);
+    let out = "";
+    for (const ch of raw) {
+      const c = ch.codePointAt(0) ?? 0;
+      const bad =
+        c <= 0x1f ||
+        (c >= 0x7f && c <= 0x9f) ||
+        (c >= 0x200b && c <= 0x200f) ||
+        (c >= 0x202a && c <= 0x202e) ||
+        (c >= 0x2060 && c <= 0x206f) ||
+        c === 0xfeff;
+      if (!bad) out += ch;
+    }
+    return out.trim() || "Phantom";
+  }
+
   handleNetMessage(fromId: string, msg: NetMsg) {
     switch (msg.t) {
       case "ps": {
         // key by the player's own id so host-relayed snapshots resolve correctly
         if (msg.p.id === this.net.selfId) break;
-        let rp = this.others.get(msg.p.id);
+        // sanitize untrusted peer fields before they touch render/state:
+        // drop a snapshot with non-finite coords, clamp name, require #rrggbb tint
+        const p = msg.p;
+        if (
+          !Number.isFinite(p.x) ||
+          !Number.isFinite(p.y) ||
+          !Number.isFinite(p.facing)
+        )
+          break;
+        p.name = this.sanitizePeerName(p.name);
+        if (!/^#[0-9a-fA-F]{6}$/.test(p.tint)) p.tint = "#d83a2e";
+        let rp = this.others.get(p.id);
         if (!rp) {
           rp = {
-            snap: msg.p,
-            rx: msg.p.x,
-            ry: msg.p.y,
+            snap: p,
+            rx: p.x,
+            ry: p.y,
             lastHitAtk: new Map(),
           };
-          this.others.set(msg.p.id, rp);
+          this.others.set(p.id, rp);
         }
-        rp.snap = msg.p;
+        rp.snap = p;
         break;
       }
       case "snap": {
@@ -2267,8 +2299,27 @@ export class Game {
       }
       case "edmg": {
         if (this.net.mode === "host") {
-          const e = this.enemies.find((x) => x.id === msg.id);
-          if (e) this.applyEnemyDamage(e, msg.amt, msg.kx, msg.ky, fromId, msg.poise || 0);
+          // untrusted client input: reject non-finite / out-of-range values so a
+          // crafted packet can't one-shot bosses or inject NaN/Infinity into the
+          // host's physics (which would desync and crash every connected peer).
+          if (
+            Number.isFinite(msg.amt) &&
+            msg.amt > 0 &&
+            msg.amt <= 9999 &&
+            Number.isFinite(msg.kx) &&
+            Number.isFinite(msg.ky)
+          ) {
+            const e = this.enemies.find((x) => x.id === msg.id);
+            if (e)
+              this.applyEnemyDamage(
+                e,
+                clamp(msg.amt, 1, 9999),
+                clamp(msg.kx, -2000, 2000),
+                clamp(msg.ky, -2000, 2000),
+                fromId,
+                Number.isFinite(msg.poise) ? clamp(msg.poise || 0, 0, 500) : 0
+              );
+          }
         }
         break;
       }
@@ -2290,6 +2341,17 @@ export class Game {
   }
 
   applySnap(s: import("./types").HostSnap) {
+    // Defensive bounds on a host->client snapshot: a modified host could send a
+    // huge array to spike the client's reconciliation loop, or non-finite coords
+    // to wedge the camera. Drop absurd snapshots wholesale.
+    if (
+      !s ||
+      !Array.isArray(s.enemies) ||
+      !Array.isArray(s.projectiles) ||
+      s.enemies.length > 300 ||
+      s.projectiles.length > 300
+    )
+      return;
     if (s.area !== this.areaId) {
       this.loadArea(s.area, true);
     }
