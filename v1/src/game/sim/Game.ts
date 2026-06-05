@@ -2359,6 +2359,14 @@ export class Game {
     const seen = new Set<number>();
     const byId = new Map(this.enemies.map((e) => [e.id, e]));
     for (const es of s.enemies) {
+      // drop a malformed entity rather than feed NaN/Infinity to the renderer
+      if (
+        !Number.isFinite(es.x) ||
+        !Number.isFinite(es.y) ||
+        !Number.isFinite(es.hp) ||
+        !Number.isFinite(es.maxHp)
+      )
+        continue;
       seen.add(es.id);
       let e = byId.get(es.id);
       if (!e) {
@@ -2389,6 +2397,8 @@ export class Game {
     const pById = new Map(this.projectiles.map((p) => [p.id, p]));
     const newProj: Projectile[] = [];
     for (const ps of s.projectiles) {
+      if (!Number.isFinite(ps.x) || !Number.isFinite(ps.y) || !Number.isFinite(ps.r))
+        continue;
       const ex = pById.get(ps.id);
       if (ex) {
         // estimate velocity from movement for local interp

@@ -26,7 +26,9 @@ The original one-shot build.
   server required.
 
 ```bash
-cd v1 && npm install && npm run dev    # http://localhost:3000
+cd v1 && npm install
+npm run dev      # dev server → http://localhost:3000
+npm run build    # static export → v1/out/ (deploy that folder to any static host)
 ```
 
 ## `v2/` — the Walmart version
@@ -50,7 +52,9 @@ The glow-up. Same gameplay, rebuilt on a real renderer with real art.
   1 → boss).
 
 ```bash
-cd v2 && npm install && npm run dev    # http://localhost:3000
+cd v2 && npm install
+npm run dev      # dev server → http://localhost:3000
+npm run build    # static export → v2/out/ (deploy that folder to any static host)
 ```
 
 > The animated sprite sheets under `v2/public/assets/anim/` are AI-generated
@@ -82,5 +86,9 @@ You should not be.
 
 ---
 
-Both versions deploy as static Next.js apps; co-op signaling runs on the public
-PeerJS cloud, so there is no backend to host.
+Both versions are configured for a fully static export (`output: "export"`):
+`npm run build` emits a self-contained `out/` you can drop on any static host
+(GitHub Pages, Netlify, Vercel, an S3 bucket, a USB stick). Co-op signaling runs
+on the public PeerJS cloud, so there is no backend to host. Inbound peer data is
+validated/clamped at the wire boundary, room codes use a CSPRNG, and the dev-only
+debug hooks are stripped from the production build.

@@ -246,6 +246,55 @@ export function sanitizeTint(v: unknown): string {
 /** Max replicated entities/projectiles in a single world snapshot (DoS guard). */
 const MAX_SNAP_ITEMS = 300;
 
+/** Validate one entity in a world snapshot; null if any required numeric is non-finite. */
+function validEntitySnap(v: unknown): EntitySnap | null {
+  if (!v || typeof v !== "object") return null;
+  const e = v as Record<string, unknown>;
+  if (
+    !isFiniteNum(e.id) ||
+    !isFiniteNum(e.x) ||
+    !isFiniteNum(e.y) ||
+    !isFiniteNum(e.facing) ||
+    !isFiniteNum(e.hp) ||
+    !isFiniteNum(e.maxHp)
+  )
+    return null;
+  return {
+    id: e.id,
+    kind: typeof e.kind === "string" ? e.kind.slice(0, 32) : "grub",
+    x: e.x,
+    y: e.y,
+    facing: e.facing,
+    hp: e.hp,
+    maxHp: e.maxHp,
+    animState: typeof e.animState === "string" ? e.animState.slice(0, 32) : "idle",
+    dead: !!e.dead,
+  };
+}
+
+/** Validate one projectile in a world snapshot; null if any required numeric is non-finite. */
+function validProjectileSnap(v: unknown): ProjectileSnap | null {
+  if (!v || typeof v !== "object") return null;
+  const p = v as Record<string, unknown>;
+  if (
+    !isFiniteNum(p.id) ||
+    !isFiniteNum(p.x) ||
+    !isFiniteNum(p.y) ||
+    !isFiniteNum(p.facing) ||
+    !isFiniteNum(p.r)
+  )
+    return null;
+  return {
+    id: p.id,
+    x: p.x,
+    y: p.y,
+    facing: p.facing,
+    r: p.r,
+    hostile: !!p.hostile,
+    kind: typeof p.kind === "string" ? p.kind.slice(0, 32) : undefined,
+  };
+}
+
 /**
  * Validate + normalize an inbound wire payload. Returns a safe `NetMsg`, or
  * `null` if the payload is malformed/out-of-bounds and should be dropped.
@@ -303,8 +352,31 @@ export function validateNetMsg(data: unknown): NetMsg | null {
         s.projectiles.length > MAX_SNAP_ITEMS
       )
         return null;
-      // host -> client, host-authoritative: shape is trusted past the size cap.
-      return { t: "world", s: m.s as WorldSnap };
+      // host-authoritative, but still drop any entity/projectile carrying
+      // non-finite numerics so a malformed snapshot can't inject NaN coords
+      // into the renderer/camera.
+      const entities = (s.entities as unknown[])
+        .map(validEntitySnap)
+        .filter((e): e is EntitySnap => e !== null);
+      const projectiles = (s.projectiles as unknown[])
+        .map(validProjectileSnap)
+        .filter((p): p is ProjectileSnap => p !== null);
+      const boss =
+        s.boss &&
+        typeof s.boss === "object" &&
+        isFiniteNum((s.boss as Record<string, unknown>).hp01)
+          ? (s.boss as BossSnap)
+          : null;
+      return {
+        t: "world",
+        s: {
+          area: s.area.slice(0, 64),
+          time: isFiniteNum(s.time) ? s.time : 0,
+          entities,
+          projectiles,
+          boss,
+        },
+      };
     }
     case "area":
       return typeof m.area === "string"

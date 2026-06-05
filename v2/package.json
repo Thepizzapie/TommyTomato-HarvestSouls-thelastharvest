@@ -12,7 +12,7 @@
   "dependencies": {
     "next": "14.2.5",
     "peerjs": "1.5.4",
-    "pixi.js": "^8.2.6",
+    "pixi.js": "8.19.0",
     "react": "18.3.1",
     "react-dom": "18.3.1"
   },
