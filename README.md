@@ -61,10 +61,16 @@ cd v2 && npm install && npm run dev    # http://localhost:3000
 
 ## Controls (both versions)
 
-`WASD`/arrows move · **MOUSE** aim · **LMB** light attack · **F** heavy · **SPACE**
-dodge roll (i-frames) · **RMB** guard (time it = parry → riposte) · strike from
-behind = backstab · **TAB**/**Q** lock-on · **1–4** equip weapon · **R**/**H**
-heal · **E** rest at a Compost Heap · **P** pause.
+**Keyboard & mouse:** `WASD`/arrows move · **MOUSE** aim · **LMB** light attack ·
+**F** heavy · **SPACE** dodge roll (i-frames) · **RMB** guard (time it = parry →
+riposte) · strike from behind = backstab · **TAB**/**Q** lock-on · **1–4** equip
+weapon · **R**/**H** heal · **E** rest at a Compost Heap · **P** pause.
+
+**Controller (Xbox layout, plug-and-play):** **left stick** move · **right stick**
+aim · **RB** light attack · **RT** heavy · **A** dodge roll · **LB**/**LT** guard
+(time it = parry) · **Y**/**R3** lock-on · **D-pad** equip weapon (and steer the
+rest menus) · **X** heal · **B** rest / interact / revive. Keyboard and controller
+are live at the same time, so you can mix and match mid-fight.
 
 ## The loop
 

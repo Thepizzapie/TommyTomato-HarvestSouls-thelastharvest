@@ -210,16 +210,60 @@ export default function PixiStage() {
 
       let footAccum = 0;
 
+      // ---- gamepad (Xbox layout) ----
+      let pcx = 0, pcy = 0; // last-known player pos, for right-stick aim
+      let prevBtn: boolean[] = [];
+      const DEAD = 0.28, AIM_REACH = 320;
+      const pollPad = () => {
+        const out = { mx: 0, my: 0, useAim: false, adx: 0, ady: 0, light: false, heavy: false, roll: false, guard: false, heal: false, interact: false, lock: false, w: [false, false, false, false] as boolean[] };
+        const pads = typeof navigator !== "undefined" && navigator.getGamepads ? navigator.getGamepads() : [];
+        let gp: Gamepad | null = null;
+        for (const p of pads) { if (p && p.connected) { gp = p; break; } }
+        if (!gp) { prevBtn = []; return out; }
+        const ax = gp.axes, b = gp.buttons;
+        const lx = ax[0] || 0, ly = ax[1] || 0, rx = ax[2] || 0, ry = ax[3] || 0;
+        if (Math.hypot(lx, ly) > DEAD) { out.mx = lx; out.my = ly; }       // left stick = move
+        if (Math.hypot(rx, ry) > DEAD) { out.useAim = true; out.adx = rx; out.ady = ry; } // right stick = aim
+        const down = (i: number) => !!(b[i] && b[i].pressed);
+        const edge = (i: number) => down(i) && !prevBtn[i];
+        out.light = edge(5);            // RB  → light attack
+        out.heavy = edge(7);            // RT  → heavy attack
+        out.roll = edge(0);             // A   → dodge roll
+        out.guard = down(4) || down(6); // LB/LT (hold) → guard / parry
+        out.heal = edge(2);             // X   → heal
+        out.interact = edge(1);         // B   → rest / interact
+        out.lock = edge(3) || edge(10); // Y / R3 → lock-on
+        out.w[0] = edge(12); out.w[1] = edge(13); out.w[2] = edge(14); out.w[3] = edge(15); // dpad ↑↓←→ → weapons 1-4
+        if (b.some((x) => x && x.pressed)) startAudio(); // controller press = the audio gesture
+        prevBtn = b.map((x) => !!(x && x.pressed));
+        return out;
+      };
+
       // ---- loop ----
       app.ticker.add((tk: { deltaMS: number }) => {
         const dtMS = tk.deltaMS, dt = Math.min(dtMS / 1000, 0.05), t = app.ticker.lastTime / 1000;
-        const aimX = (mouseX - world.x) / ZOOM, aimY = (mouseY - world.y) / ZOOM;
+        const gp = pollPad();
         let mx = 0, my = 0;
         if (held.has("KeyW") || held.has("ArrowUp")) my -= 1;
         if (held.has("KeyS") || held.has("ArrowDown")) my += 1;
         if (held.has("KeyA") || held.has("ArrowLeft")) mx -= 1;
         if (held.has("KeyD") || held.has("ArrowRight")) mx += 1;
-        const input: InputState = { ...EMPTY_INPUT, moveX: mx, moveY: my, aimX, aimY, lightPressed: lmbPressed || pressed.has("KeyJ"), heavyPressed: pressed.has("KeyF") || pressed.has("KeyK"), rollPressed: pressed.has("Space"), lockOnPressed: pressed.has("Tab") || pressed.has("KeyQ"), healPressed: pressed.has("KeyR") || pressed.has("KeyH"), interactPressed: pressed.has("KeyE"), weapon1Pressed: pressed.has("Digit1"), weapon2Pressed: pressed.has("Digit2"), weapon3Pressed: pressed.has("Digit3"), weapon4Pressed: pressed.has("Digit4"), guardHeld: rmbDown };
+        if (gp.mx || gp.my) { mx += gp.mx; my += gp.my; } // left stick (sim normalizes)
+        let aimX: number, aimY: number;
+        if (gp.useAim) { aimX = pcx + gp.adx * AIM_REACH; aimY = pcy + gp.ady * AIM_REACH; } // right stick aim
+        else { aimX = (mouseX - world.x) / ZOOM; aimY = (mouseY - world.y) / ZOOM; } // mouse aim
+        const input: InputState = { ...EMPTY_INPUT, moveX: mx, moveY: my, aimX, aimY,
+          lightPressed: lmbPressed || pressed.has("KeyJ") || gp.light,
+          heavyPressed: pressed.has("KeyF") || pressed.has("KeyK") || gp.heavy,
+          rollPressed: pressed.has("Space") || gp.roll,
+          lockOnPressed: pressed.has("Tab") || pressed.has("KeyQ") || gp.lock,
+          healPressed: pressed.has("KeyR") || pressed.has("KeyH") || gp.heal,
+          interactPressed: pressed.has("KeyE") || gp.interact,
+          weapon1Pressed: pressed.has("Digit1") || gp.w[0],
+          weapon2Pressed: pressed.has("Digit2") || gp.w[1],
+          weapon3Pressed: pressed.has("Digit3") || gp.w[2],
+          weapon4Pressed: pressed.has("Digit4") || gp.w[3],
+          guardHeld: rmbDown || gp.guard };
 
         if (!simPaused) sim.update(dt, input);
         const st = sim.getState();
@@ -228,6 +272,7 @@ export default function PixiStage() {
 
         // player
         const pe = st.player.entity;
+        pcx = pe.x; pcy = pe.y; // for next frame's right-stick aim
         playerActor.x = pe.x; playerActor.y = pe.y; playerActor.zIndex = pe.y;
         playerActor.setFacing(pe.facingFlip ? -1 : 1);
         if (playerActor.state !== pe.animState) playerActor.play(pe.animState);

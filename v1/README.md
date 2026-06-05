@@ -56,9 +56,14 @@ infrastructure — signaling and STUN are handled by the public PeerJS cloud.
 
 ## Controls
 
-`WASD` move · `MOUSE` aim · `LMB` light attack · `F` heavy · `SPACE` dodge roll
-(i-frames) · `RMB` guard · `TAB`/`Q` lock-on · `R`/`H` heal (Watering Can) ·
-`E` rest at a Compost Heap · `P` pause.
+**Keyboard & mouse:** `WASD` move · `MOUSE` aim · `LMB` light attack · `F` heavy ·
+`SPACE` dodge roll (i-frames) · `RMB` guard · `TAB`/`Q` lock-on · `1`–`4` equip
+weapon · `R`/`H` heal (Watering Can) · `E` rest at a Compost Heap · `P` pause.
+
+**Controller (Xbox layout):** left stick move · right stick aim · `RB` light ·
+`RT` heavy · `A` dodge roll · `LB`/`LT` guard · `Y`/`R3` lock-on · `D-pad` equip
+weapon · `X` heal · `B` rest / interact / revive. Plug in and play — keyboard and
+pad work simultaneously.
 
 ## The loop
 

@@ -77,6 +77,41 @@ const SYSTEM: Ctrl[] = [
   { keys: ["P"], title: "Pause", desc: "Hold the harvest a moment." },
 ];
 
+// Controller (Xbox layout). Plug in a pad and it just works — these fold into
+// the same actions as the keyboard/mouse, so you can mix and match mid-fight.
+const CONTROLLER: Ctrl[] = [
+  { keys: ["LS"], title: "Move", desc: "Left stick walks Tommy through the rows." },
+  {
+    keys: ["RS"],
+    title: "Aim",
+    desc: "Right stick aims your strike — Tommy faces wherever you point.",
+  },
+  { keys: ["RB"], title: "Light attack", desc: "The quick strike. Same as LMB." },
+  { keys: ["RT"], title: "Heavy attack", desc: "The poise-breaker. Same as F." },
+  { keys: ["A"], title: "Dodge roll", desc: "Roll with i-frames. Same as SPACE." },
+  {
+    keys: ["LB", "LT"],
+    title: "Guard / Parry",
+    desc: "Hold to block; time the raise just before a hit to PARRY.",
+  },
+  {
+    keys: ["Y", "R3"],
+    title: "Lock-on",
+    desc: "Fix the nearest foe. Press again to release.",
+  },
+  { keys: ["X"], title: "Heal", desc: "Pull from the Watering Can." },
+  {
+    keys: ["B"],
+    title: "Rest / Interact",
+    desc: "Rest at a heap, revive on the death screen, and back out of menus.",
+  },
+  {
+    keys: ["D-PAD"],
+    title: "Equip weapon",
+    desc: "Up / Down / Left / Right swap to armaments 1–4 — and steer the rest menus.",
+  },
+];
+
 const WEAPON_POSE: Record<WeaponKind, { heavy: boolean }> = {
   whip: { heavy: false },
   dagger: { heavy: false },
@@ -122,13 +157,15 @@ export default function ControlsPage() {
         <p>
           A soulslike in a salad. Stamina is everything — attacking, rolling,
           and blocking all spend it, and an empty tomato is a dead tomato.
-          Patience kills. Greed gets you composted.
+          Patience kills. Greed gets you composted. Keyboard &amp; mouse or a{" "}
+          <span className="key key--inline">controller</span> — your choice.
         </p>
       </header>
 
       <Group title="Movement" items={MOVEMENT} />
       <Group title="Combat" items={COMBAT} />
       <Group title="System" items={SYSTEM} />
+      <Group title="Controller (Xbox layout)" items={CONTROLLER} />
 
       {/* weapons gallery */}
       <section className="ctrl-group">
