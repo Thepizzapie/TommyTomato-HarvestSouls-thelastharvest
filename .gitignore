@@ -1,0 +1,19 @@
+# dependencies / build output (per-app .gitignore files also cover these)
+**/node_modules
+**/.next
+**/out
+**/build
+**/*.tsbuildinfo
+**/next-env.d.ts
+
+# env / secrets
+**/.env
+**/.env.*
+!**/.env.example
+
+# editor / OS / tooling
+**/.claude
+**/.vercel
+.DS_Store
+Thumbs.db
+*.log
