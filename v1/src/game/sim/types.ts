@@ -16,6 +16,8 @@ export type NetMsg =
   | { t: "area"; area: string } // host -> clients area change
   | { t: "sap"; pid: string; amt: number } // host -> a player: you earned sap
   | { t: "fx"; kind: string; x: number; y: number } // cosmetic effect broadcast
+  | { t: "draft" } // host -> clients: open your boon draft (harvest co-op)
+  | { t: "draftdone"; id: string } // client -> host: I've picked my boon
   | { t: "bye"; id: string };
 
 export interface PlayerSnap {

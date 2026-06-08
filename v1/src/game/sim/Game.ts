@@ -39,6 +39,10 @@ import {
   type CharmDef,
 } from "../content/world";
 import {
+  defaultRunMods, newRun, takeBoon, rollBoonChoices, addSpecialCharge, specialChargePct,
+  specialReady, fireSpecial, ACTS, type RunMods, type RunState, type Boon,
+} from "./run";
+import {
   ParticleSystem,
   renderLighting,
   drawWeather,
@@ -152,6 +156,7 @@ interface RemotePlayer {
 type Screen =
   | "play"
   | "bonfire"
+  | "boon"
   | "dead"
   | "victory"
   | "paused"
@@ -237,6 +242,26 @@ export class Game {
 
   screen: Screen = "loading";
   bonfireSel = 0;
+
+  // --- Harvest Run (roguelite) state. null in the classic campaign. ---
+  run: RunState | null = null;
+  private _noMods = defaultRunMods();
+  /** Active run modifiers, or a neutral identity in campaign mode. */
+  get mods(): RunMods {
+    return this.run ? this.run.mods : this._noMods;
+  }
+  harvest = false;
+  boonChoices: Boon[] = [];
+  boonSel = 0;
+  private roomActive = false;
+  private _baseEstus = 4;
+  // boons whose effects are wired into the engine (drafted only from these)
+  private readonly WIRED = new Set<string>([
+    "ripe_flesh", "second_wind", "sharpened_thorn", "quick_roots", "deep_pantry",
+    "bloodroot", "photosynthesis", "long_vine", "overripe", "adrenal_sap", "harvesters_favor",
+  ]);
+  private coopDraftWait = 0; // host: clients still drafting before the run advances
+  private hostPicked = false; // host: has the host finished its own draft this round
   toastT = 0;
   toastMsg = "";
   toastSub = "";
@@ -300,22 +325,27 @@ export class Game {
     this.viewScale = clamp(this.cssH / 660, 0.55, 1.4);
   };
 
-  start(profile?: SaveData) {
+  start(profile?: SaveData, harvestMode = false) {
     if (profile) this.applyProfile(profile);
-    else if (this.net.mode === "solo") {
+    else if (this.net.mode === "solo" && !harvestMode) {
       const saved = Game.loadSave();
       if (saved) this.applyProfile(saved);
     }
-    this.recompute();
-    this.hp = this.maxHp;
-    this.stamina = this.maxStamina;
-    this.estus = this.estusMax;
-    this.loadArea(this.net.mode === "client" ? FIRST_AREA : this.areaId, true);
-    this.setScreen("play");
     this.running = true;
     this.lastT = performance.now();
     this.audio.resume();
     this.audio.startMusic();
+    if (harvestMode) {
+      this.startHarvestRun(this.net.mode !== "client");
+      if (this.net.mode === "client") this.loadArea(FIRST_AREA, true); // host syncs the real area
+    } else {
+      this.recompute();
+      this.hp = this.maxHp;
+      this.stamina = this.maxStamina;
+      this.estus = this.estusMax;
+      this.loadArea(this.net.mode === "client" ? FIRST_AREA : this.areaId, true);
+    }
+    this.setScreen("play");
     this.raf = requestAnimationFrame(this.frame);
   }
 
@@ -332,8 +362,9 @@ export class Game {
   }
 
   recompute() {
-    this.maxHp = deriveMaxHp(this.stats);
-    this.maxStamina = deriveMaxStamina(this.stats);
+    const m = this.mods;
+    this.maxHp = Math.max(1, Math.round(deriveMaxHp(this.stats) + m.maxHpBonus));
+    this.maxStamina = Math.round(deriveMaxStamina(this.stats) + m.maxStaminaBonus);
   }
 
   setScreen(s: Screen) {
@@ -534,6 +565,11 @@ export class Game {
       this.updateParticles(dt);
       return;
     }
+    if (this.screen === "boon") {
+      this.updateBoonDraft();
+      this.updateParticles(dt);
+      return;
+    }
     if (this.screen === "victory") {
       this.updateParticles(dt);
       return;
@@ -614,8 +650,9 @@ export class Game {
       }
     }
     // charm passive regen (Thirsty Root)
-    if (this.charm?.hpRegen && this.hp > 0 && this.hp < this.maxHp) {
-      this.hpRegenAcc += this.charm.hpRegen * dt;
+    const regenRate = (this.charm?.hpRegen || 0) + this.mods.regenPerSec;
+    if (regenRate > 0 && this.hp > 0 && this.hp < this.maxHp) {
+      this.hpRegenAcc += regenRate * dt;
       if (this.hpRegenAcc >= 1) {
         const g = Math.floor(this.hpRegenAcc);
         this.hpRegenAcc -= g;
@@ -662,7 +699,7 @@ export class Game {
       }
     }
 
-    const speed = deriveSpeed(this.stats);
+    const speed = deriveSpeed(this.stats) * this.mods.moveSpeedMul;
     const mv = this.input.moveVec();
     const mvn = norm(mv.x, mv.y);
     this.moving = mv.x !== 0 || mv.y !== 0;
@@ -726,6 +763,12 @@ export class Game {
       const moveSpeed = this.blocking ? speed * 0.5 : speed;
       this.pvx = ax * moveSpeed;
       this.pvy = ay * moveSpeed;
+
+      // special move (C) — unleashed when the Harvest meter is full
+      if (this.input.pressed("KeyC") && this.run && specialReady(this.run)) {
+        const sdef = fireSpecial(this.run);
+        if (sdef) this.fireSpecialEffect(sdef);
+      }
 
       // roll
       if (
@@ -823,9 +866,11 @@ export class Game {
 
   doMeleeHit() {
     const w = WEAPONS[this.weapon];
-    const reach = w.reach * (this.attackHeavy ? 1.05 : 1);
+    const m = this.mods;
+    const reach = w.reach * (this.attackHeavy ? 1.05 : 1) * m.reachMul;
     const half = w.arcHalf;
-    const baseAtk = deriveAttack(this.stats) * (this.charm?.damageMul || 1);
+    const lowHp = this.hp < this.maxHp * 0.4 ? m.lowHpDamageMul : 1;
+    const baseAtk = deriveAttack(this.stats) * (this.charm?.damageMul || 1) * m.damageMul * lowHp;
     const dmg = baseAtk * (this.attackHeavy ? w.heavyMul : w.lightMul);
     const ox = this.px + Math.cos(this.facing) * 10;
     const oy = this.py + Math.sin(this.facing) * 10;
@@ -834,6 +879,10 @@ export class Game {
       if (this.attackHitSet.has(e.id)) continue;
       if (inArc(e.x, e.y, ox, oy, this.facing, half, reach + e.def.radius)) {
         this.attackHitSet.add(e.id);
+        if (this.run) {
+          if (this.mods.lifestealFrac > 0) this.hp = Math.min(this.maxHp, this.hp + dmg * this.mods.lifestealFrac);
+          addSpecialCharge(this.run, dmg);
+        }
         let d = dmg;
         let crit = false;
         let poise = (w.poise || 6) * (this.attackHeavy ? 2 : 1);
@@ -966,8 +1015,8 @@ export class Game {
       this.grantCharm("first_fruits_pith");
     }
     if (e.kind === "harvester") this.grantCharm("hollow_seed");
-    if (this.areaId === "yard") {
-      // final victory
+    if (this.areaId === "yard" && !this.harvest) {
+      // final victory (campaign only; harvest advances via onEncounterClear)
       setTimeout(() => this.setScreen("victory"), 2200);
     }
     this.save();
@@ -987,7 +1036,56 @@ export class Game {
     this.toast(c ? c.name : "Charm", "found — equip it at a Compost Heap");
   }
 
+  // Execute a special move's effect (charge already spent by fireSpecial()).
+  fireSpecialEffect(def: { kind: string; power: number; radius?: number; range?: number }) {
+    const base = deriveAttack(this.stats) * this.mods.damageMul * def.power;
+    if (def.kind === "nova" || def.kind === "field") {
+      const r = def.radius || 150;
+      for (const e of this.enemies) {
+        if (e.state === "dead") continue;
+        if (dist2(e.x, e.y, this.px, this.py) <= (r + e.def.radius) ** 2) {
+          const n = norm(e.x - this.px, e.y - this.py);
+          this.hitEnemy(e, base, n.x * 320, n.y * 320, 90, true);
+        }
+      }
+      this.spawnParticles(this.px, this.py, 36, "#ffd56b", 260, true);
+      this.ps.emit("death", this.px, this.py, { count: 30, speed: 230 });
+      this.addShake(16);
+      this.flash("#ffd56b", 0.32);
+      this.audio.splat();
+    } else if (def.kind === "dash") {
+      const range = def.range || 260;
+      const dx = Math.cos(this.facing), dy = Math.sin(this.facing);
+      this.pvx = dx * 1300;
+      this.pvy = dy * 1300;
+      this.invuln = Math.max(this.invuln, 0.4);
+      for (const e of this.enemies) {
+        if (e.state === "dead") continue;
+        const along = (e.x - this.px) * dx + (e.y - this.py) * dy;
+        const perp = Math.abs(-(e.x - this.px) * dy + (e.y - this.py) * dx);
+        if (along > -20 && along < range && perp < 64 + e.def.radius) {
+          this.hitEnemy(e, base, dx * 240, dy * 240, 60, true);
+        }
+      }
+      this.addShake(10);
+      this.audio.swing();
+    } else if (def.kind === "volley") {
+      const range = 380, arc = 0.55;
+      for (const e of this.enemies) {
+        if (e.state === "dead") continue;
+        if (dist2(e.x, e.y, this.px, this.py) > range * range) continue;
+        let da = Math.abs(angleTo(this.px, this.py, e.x, e.y) - this.facing) % (Math.PI * 2);
+        if (da > Math.PI) da = Math.PI * 2 - da;
+        if (da < arc) this.hitEnemy(e, base * 0.7, 0, 0, 30, true);
+      }
+      this.spawnParticles(this.px, this.py, 22, "#9fd44e", 290, true);
+      this.audio.swing();
+    }
+  }
+
   gainSap(amt: number) {
+    amt = Math.round(amt * this.mods.sapMul);
+    if (this.run) this.run.sapBanked += amt;
     const got = Math.round(amt * (this.charm?.sapMul || 1));
     this.sap += got;
     this.floatText(this.px, this.py - 30, "+" + got + " sap", "#e8b53a", 16);
@@ -1090,6 +1188,31 @@ export class Game {
       e.vx = (e.vx / m) * spd;
       e.vy = (e.vy / m) * spd;
     }
+  }
+
+  // Boss spacing: close to a standoff just inside attack range and hold (circle a
+  // little) rather than gluing to the player; back off if shoved too close. Keeps
+  // fights about reading telegraphs, not eating point-blank spam.
+  private bossApproach(e: Enemy, d: number, tx: number, ty: number, speedMul = 1) {
+    const standoff = Math.max(e.def.radius + 46, e.def.attackRange * 0.72);
+    const spd = e.def.speed * speedMul;
+    if (d > standoff + 26) {
+      this.moveTo(e, tx, ty, spd);
+    } else if (d < standoff - 46) {
+      this.moveTo(e, e.x + (e.x - tx), e.y + (e.y - ty), spd * 0.85); // too close
+    } else {
+      const n = norm(tx - e.x, ty - e.y); // hold range, strafe a touch
+      e.vx += -n.y * spd * 0.3;
+      e.vy += n.x * spd * 0.3;
+    }
+  }
+
+  // Give a little ground after an attack — a brief punish window — but never flee
+  // past comfortable spacing, so the boss re-engages instead of turtling at range.
+  private bossBackoff(e: Enemy, tx: number, ty: number) {
+    const d = Math.hypot(tx - e.x, ty - e.y);
+    const want = Math.max(e.def.radius + 70, e.def.attackRange * 0.95);
+    if (d < want) this.moveTo(e, e.x + (e.x - tx), e.y + (e.y - ty), e.def.speed * 0.5);
   }
 
   aiSwarm(e: Enemy, dt: number, d: number, tx: number, ty: number) {
@@ -1338,29 +1461,32 @@ export class Game {
       }
       if (e.timer <= 0) {
         e.state = "recover";
-        e.timer = (1.0 / aggr);
+        e.timer = 1.3 / aggr;
       }
       return;
     }
     if (e.state === "recover") {
       e.timer -= dt;
+      this.bossBackoff(e, tx, ty); // give ground — opens a punish window
       if (e.timer <= 0) e.state = "chase";
       return;
     }
     // chase / choose attack
     if (e.cd <= 0) {
-      if (d < 110) {
-        e.bossMove = e.bossPhase2 && this.rng.chance(0.4) ? 3 : 0; // sweep or spin
+      const r = this.rng.next();
+      if (d < 120) {
+        // close: sweep, spin (p2), or a 360 straw burst that punishes hugging
+        e.bossMove = e.bossPhase2 && r < 0.3 ? 3 : r < 0.55 ? 5 : 0;
       } else if (d < 360) {
-        e.bossMove = 1; // lunge
+        e.bossMove = r < 0.42 ? 4 : 1; // crow volley or lunge
       } else {
-        e.bossMove = 2; // summon
+        e.bossMove = r < 0.5 ? 4 : 2; // crow volley or summon the swarm
       }
       e.state = "windup";
       e.timer = e.def.windup / aggr;
       e.cd = (e.def.attackCooldown + e.def.windup) / aggr;
     } else {
-      this.moveTo(e, tx, ty, e.def.speed * (e.bossPhase2 ? 1.2 : 1));
+      this.bossApproach(e, d, tx, ty, e.bossPhase2 ? 1.2 : 1);
     }
   }
 
@@ -1390,6 +1516,25 @@ export class Game {
     } else if (e.bossMove === 3) {
       e.timer = 1.2; // spin
       this.shake = 6;
+    } else if (e.bossMove === 4) {
+      // crow volley — an aimed five-shot spread (strafe to dodge)
+      e.timer = 0.3;
+      this.audio.swing();
+      const base = angleTo(e.x, e.y, tx, ty);
+      for (let i = -2; i <= 2; i++) {
+        const a = base + i * 0.2;
+        this.spawnProjectileVel(e.x, e.y, Math.cos(a) * 320, Math.sin(a) * 320, 9, e.def.attackDmg * 0.6, "#2e2114");
+      }
+    } else if (e.bossMove === 5) {
+      // straw burst — a radial ring that punishes hugging (roll through a gap)
+      e.timer = 0.35;
+      this.addShake(10);
+      this.audio.bossRoar();
+      const n = e.bossPhase2 ? 16 : 12;
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2;
+        this.spawnProjectileVel(e.x, e.y, Math.cos(a) * 240, Math.sin(a) * 240, 9, e.def.attackDmg * 0.6, "#e8c07a");
+      }
     }
   }
 
@@ -1431,28 +1576,29 @@ export class Game {
       }
       if (e.timer <= 0) {
         e.state = "recover";
-        e.timer = 0.9 / aggr;
+        e.timer = 1.2 / aggr;
       }
       return;
     }
     if (e.state === "recover") {
       e.timer -= dt;
-      e.vx *= 0.8;
-      e.vy *= 0.8;
+      this.bossBackoff(e, tx, ty);
       if (e.timer <= 0) e.state = "chase";
       return;
     }
     if (e.cd <= 0) {
       const r = this.rng.next();
-      if (d > 280) e.bossMove = 0; // charge
-      else if (r < 0.4) e.bossMove = 1; // spray volley
-      else if (r < 0.7) e.bossMove = 2; // spin
-      else e.bossMove = 3; // slam shockwave
+      if (d > 280) e.bossMove = r < 0.6 ? 0 : 4; // charge or blade fan
+      else if (r < 0.28) e.bossMove = 1; // radial pesticide volley
+      else if (r < 0.46) e.bossMove = 2; // spin
+      else if (r < 0.64) e.bossMove = 3; // slam shockwave
+      else if (r < 0.82) e.bossMove = 4; // blade fan (aimed cone)
+      else e.bossMove = 5; // mortar burst (aimed heavy shots)
       e.state = "windup";
       e.timer = e.def.windup / aggr;
       e.cd = (e.def.attackCooldown + e.def.windup) / aggr;
     } else {
-      this.moveTo(e, tx, ty, e.def.speed);
+      this.bossApproach(e, d, tx, ty);
     }
   }
 
@@ -1484,6 +1630,26 @@ export class Game {
     } else if (e.bossMove === 2) {
       e.timer = 1.0;
       this.shake = 6;
+    } else if (e.bossMove === 4) {
+      // blade fan — an aimed forward cone of fast blades (dodge sideways)
+      e.timer = 0.3;
+      this.audio.swing();
+      const base = angleTo(e.x, e.y, tx, ty);
+      const n = e.bossPhase2 ? 9 : 7;
+      for (let i = 0; i < n; i++) {
+        const a = base + (i - (n - 1) / 2) * 0.14;
+        this.spawnProjectileVel(e.x, e.y, Math.cos(a) * 360, Math.sin(a) * 360, 9, e.def.attackDmg * 0.55, "#cfe2ee");
+      }
+    } else if (e.bossMove === 5) {
+      // mortar burst — three slow heavy shots (big, telegraphed)
+      e.timer = 0.35;
+      this.addShake(8);
+      this.audio.splat();
+      const base = angleTo(e.x, e.y, tx, ty);
+      for (let i = -1; i <= 1; i++) {
+        const a = base + i * 0.16;
+        this.spawnProjectileVel(e.x, e.y, Math.cos(a) * 210, Math.sin(a) * 210, 16, e.def.attackDmg * 0.85, "#ff7a3a");
+      }
     } else {
       // slam shockwave (ring of projectiles outward, close)
       e.timer = 0.3;
@@ -1545,25 +1711,27 @@ export class Game {
       }
       if (e.timer <= 0) {
         e.state = "recover";
-        e.timer = 0.7 / aggr;
+        e.timer = 1.0 / aggr;
       }
       return;
     }
     if (e.state === "recover") {
       e.timer -= dt;
+      this.bossBackoff(e, tx, ty); // give ground — opens a punish window
       if (e.timer <= 0) e.state = "chase";
       return;
     }
     // choose attack
     if (e.cd <= 0) {
-      if (e.bossPhase2 && this.rng.chance(0.3)) e.bossMove = 3; // grief nova
-      else if (d < 130) e.bossMove = 0; // thrust
-      else e.bossMove = 1; // lunge
+      const r = this.rng.next();
+      if (e.bossPhase2 && r < 0.25) e.bossMove = 3; // grief nova
+      else if (d < 140) e.bossMove = r < 0.5 ? 0 : 5; // thrust or sap burst
+      else e.bossMove = r < 0.45 ? 4 : 1; // sap spread or lunge
       e.state = "windup";
       e.timer = e.def.windup / aggr;
       e.cd = (e.def.attackCooldown + e.def.windup) / aggr;
     } else {
-      this.moveTo(e, tx, ty, e.def.speed * (e.bossPhase2 ? 1.2 : 1));
+      this.bossApproach(e, d, tx, ty, e.bossPhase2 ? 1.2 : 1);
     }
   }
 
@@ -1595,6 +1763,25 @@ export class Game {
           e.def.attackDmg * 0.7,
           "#ffd56b"
         );
+      }
+    } else if (e.bossMove === 4) {
+      // sap spread — aimed five-shard fan (strafe to dodge)
+      e.timer = 0.3;
+      this.audio.swing();
+      const base = angleTo(e.x, e.y, tx, ty);
+      for (let i = -2; i <= 2; i++) {
+        const a = base + i * 0.16;
+        this.spawnProjectileVel(e.x, e.y, Math.cos(a) * 300, Math.sin(a) * 300, 9, e.def.attackDmg * 0.6, "#ffd56b");
+      }
+    } else if (e.bossMove === 5) {
+      // sap burst — a quick tight triple at close range
+      e.timer = 0.3;
+      this.addShake(8);
+      this.audio.bossRoar();
+      const base = angleTo(e.x, e.y, tx, ty);
+      for (let i = -1; i <= 1; i++) {
+        const a = base + i * 0.5;
+        this.spawnProjectileVel(e.x, e.y, Math.cos(a) * 260, Math.sin(a) * 260, 10, e.def.attackDmg * 0.7, "#ffe08a");
       }
     }
   }
@@ -1687,6 +1874,8 @@ export class Game {
             hit = dist(e.x, e.y, this.px, this.py) < e.def.radius * e.big + 18;
           } else if (e.def.role === "boss_oldtom" && e.bossMove === 3) {
             hit = false; // nova damage comes from its projectiles, not the blade
+          } else if (e.bossMove === 4 || e.bossMove === 5) {
+            hit = false; // new ranged moves deal damage via their projectiles
           } else {
             hit = inArc(
               this.px,
@@ -1840,6 +2029,18 @@ export class Game {
   respawn() {
     this.poison = 0;
     this.audio.warp();
+    if (this.harvest) {
+      if (this.net.mode === "solo") { this.harvestRestart(); return; } // solo: permadeath
+      // co-op: forgiving — revive in place, the shared run continues
+      this.hp = this.maxHp;
+      this.stamina = this.maxStamina;
+      this.estus = this.estusMax;
+      this.pstate = "idle";
+      this.px = this.area.spawnPoint.x;
+      this.py = this.area.spawnPoint.y;
+      this.setScreen("play");
+      return;
+    }
     if (this.net.mode === "client") {
       // co-op phantom: revive at current host area spawn
       this.hp = this.maxHp;
@@ -2001,9 +2202,234 @@ export class Game {
     }
   }
 
+  // ============================ HARVEST RUN (roguelite) ============================
+  startHarvestRun(drive = true) {
+    this.harvest = true;
+    this.run = newRun(Math.floor(Math.random() * 1e9));
+    // fresh build — power comes from boons this run, not persistent levels
+    this.stats = { ...BASE_STATS };
+    this.ownedWeapons = [STARTING_WEAPON];
+    this.weapon = STARTING_WEAPON;
+    this.charm = null;
+    this.ownedCharms = [];
+    this.sap = 0;
+    this.husks = [];
+    this.bossesDead = [];
+    this._baseEstus = 4;
+    this.estusMax = this._baseEstus;
+    this.recompute();
+    this.hp = this.maxHp;
+    this.stamina = this.maxStamina;
+    this.estus = this.estusMax;
+    if (drive) this.enterRoom(); // host/solo drive; a co-op client follows host area sync
+  }
+
+  enterRoom() {
+    if (!this.run) return;
+    const act = ACTS[this.run.act];
+    const atBoss = this.run.room >= act.rooms;
+    const areaId = atBoss ? act.bossArea : act.biomes[this.run.room % act.biomes.length];
+    this.roomActive = true;
+    this.loadArea(areaId, true);
+    // breathing room — no foe spawns on top of the entry point (keep the boss)
+    this.enemies = this.enemies.filter(
+      (e) => e === this.boss || dist2(e.x, e.y, this.px, this.py) > 210 * 210
+    );
+    const label = atBoss
+      ? `Act ${this.run.act + 1} — ${act.bossName}`
+      : `Act ${this.run.act + 1} · Room ${this.run.room + 1} of ${act.rooms}`;
+    this.toast(atBoss ? "THE FOE AWAITS" : "HARVEST RUN", label);
+  }
+
+  onEncounterClear() {
+    if (!this.run) return;
+    this.roomActive = false;
+    const act = ACTS[this.run.act];
+    const wasBoss = this.run.room >= act.rooms;
+    this.run.cleared++;
+    this.run.sapBanked = this.sap;
+    if (wasBoss) {
+      this.run.act++;
+      this.run.room = 0;
+      if (this.run.act >= ACTS.length) { this.harvestVictory(); return; }
+    } else {
+      this.run.room++;
+    }
+    // co-op: have clients draft too, and don't advance until everyone has picked
+    if (this.net.mode === "host") {
+      this.hostPicked = false;
+      this.coopDraftWait = Math.max(0, this.net.getRoster().length - 1);
+      this.net.send({ t: "draft" });
+    }
+    this.openBoonDraft();
+  }
+
+  openBoonDraft() {
+    if (!this.run) return;
+    this.boonChoices = rollBoonChoices(this.run, () => Math.random(), 3, this.WIRED);
+    this.boonSel = 0;
+    if (this.boonChoices.length === 0) { this.proceedAfterBoon(); return; }
+    this.audio.uiSelect();
+    this.setScreen("boon");
+  }
+
+  updateBoonDraft() {
+    const n = this.boonChoices.length;
+    if (n === 0) { this.proceedAfterBoon(); return; }
+    if (this.input.pressed("ArrowRight") || this.input.pressed("KeyD")) { this.boonSel = (this.boonSel + 1) % n; this.audio.uiMove(); }
+    if (this.input.pressed("ArrowLeft") || this.input.pressed("KeyA")) { this.boonSel = (this.boonSel + n - 1) % n; this.audio.uiMove(); }
+    for (let i = 0; i < n; i++) if (this.input.pressed("Digit" + (i + 1))) this.boonSel = i;
+    if (this.input.pressed("Enter") || this.input.pressed("Space") || this.input.lmbPressed) this.pickBoon(this.boonSel);
+  }
+
+  pickBoon(i: number) {
+    if (!this.run || !this.boonChoices[i]) return;
+    takeBoon(this.run, this.boonChoices[i].id);
+    this.recompute();
+    this.estusMax = this._baseEstus + this.mods.estusBonus;
+    this.hp = Math.min(this.maxHp, this.hp + 20); // a little reward heal
+    this.stamina = this.maxStamina;
+    this.estus = this.estusMax;
+    this.audio.levelUp();
+    this.spawnParticles(this.px, this.py, 18, "#ffd56b", 120, true);
+    this.boonChoices = [];
+    if (this.net.mode === "client") {
+      // client doesn't drive progression — confirm and wait for the host's next room
+      this.setScreen("play");
+      this.net.send({ t: "draftdone", id: this.net.selfId });
+      return;
+    }
+    if (this.net.mode === "host" && this.coopDraftWait > 0) {
+      // host waits in the cleared room until every client has drafted
+      this.hostPicked = true;
+      this.setScreen("play");
+      return;
+    }
+    this.proceedAfterBoon();
+  }
+
+  proceedAfterBoon() {
+    this.setScreen("play");
+    this.enterRoom();
+  }
+
+  harvestVictory() {
+    this.bankMeta(this.sap, this.run ? this.run.act : 0, true);
+    this.setScreen("victory");
+  }
+
+  harvestRestart() {
+    this.bankMeta(this.sap, this.run ? this.run.act : 0, false);
+    this.startHarvestRun();
+    this.setScreen("play");
+  }
+
+  bankMeta(seeds: number, actReached: number, won: boolean) {
+    try {
+      const m = Game.loadMeta();
+      m.seeds += Math.max(0, Math.round(seeds));
+      m.runs += 1;
+      if (won) m.wins += 1;
+      m.bestAct = Math.max(m.bestAct, actReached);
+      localStorage.setItem("tt_harvest_meta", JSON.stringify(m));
+    } catch {
+      /* ignore storage errors */
+    }
+  }
+  static loadMeta(): { seeds: number; runs: number; wins: number; bestAct: number } {
+    try {
+      const raw = localStorage.getItem("tt_harvest_meta");
+      if (raw) {
+        const m = JSON.parse(raw);
+        return { seeds: m.seeds || 0, runs: m.runs || 0, wins: m.wins || 0, bestAct: m.bestAct || 0 };
+      }
+    } catch {
+      /* ignore */
+    }
+    return { seeds: 0, runs: 0, wins: 0, bestAct: 0 };
+  }
+
+  drawBoonDraft(ctx: CanvasRenderingContext2D) {
+    const W = this.cssW, H = this.cssH;
+    ctx.save();
+    ctx.fillStyle = "rgba(10,6,4,0.84)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ffd56b";
+    ctx.font = "700 28px ui-sans-serif, system-ui";
+    ctx.fillText("CHOOSE A BOON", W / 2, H * 0.18);
+    ctx.fillStyle = "#c9b89a";
+    ctx.font = "500 14px ui-sans-serif, system-ui";
+    ctx.fillText("← →  or  1–3   ·   Enter / click to take", W / 2, H * 0.18 + 26);
+
+    const n = this.boonChoices.length;
+    const cardW = Math.min(240, (W - 80) / Math.max(1, n) - 16);
+    const cardH = 175, gap = 18;
+    const totalW = n * cardW + (n - 1) * gap;
+    let x = W / 2 - totalW / 2;
+    const y = H / 2 - cardH / 2 + 10;
+    const rarityColor: Record<string, string> = { common: "#9fd44e", uncommon: "#4ea6ff", rare: "#c77dff" };
+
+    for (let i = 0; i < n; i++) {
+      const b = this.boonChoices[i];
+      const sel = i === this.boonSel;
+      const col = rarityColor[b.rarity] || "#888";
+      ctx.fillStyle = sel ? "#2c1c10" : "#170f09";
+      ctx.fillRect(x, y, cardW, cardH);
+      ctx.lineWidth = sel ? 3 : 2;
+      ctx.strokeStyle = sel ? "#ffd56b" : col;
+      ctx.strokeRect(x, y, cardW, cardH);
+      ctx.fillStyle = col;
+      ctx.font = "700 11px ui-sans-serif, system-ui";
+      ctx.fillText(b.rarity.toUpperCase(), x + cardW / 2, y + 28);
+      ctx.fillStyle = "#fff";
+      ctx.font = "700 19px ui-sans-serif, system-ui";
+      ctx.fillText(b.name, x + cardW / 2, y + 62);
+      ctx.fillStyle = "#d9c9ab";
+      ctx.font = "500 13px ui-sans-serif, system-ui";
+      ctx.fillText(b.desc, x + cardW / 2, y + 96);
+      ctx.fillStyle = sel ? "#ffd56b" : "#8a7a5a";
+      ctx.font = "700 13px ui-sans-serif, system-ui";
+      ctx.fillText(String(i + 1), x + cardW / 2, y + cardH - 16);
+      x += cardW + gap;
+    }
+    ctx.restore();
+  }
+
+  drawRunHud(ctx: CanvasRenderingContext2D) {
+    if (!this.run) return;
+    const act = ACTS[this.run.act];
+    if (!act) return;
+    ctx.save();
+    ctx.textAlign = "center";
+    const atBoss = this.run.room >= act.rooms;
+    ctx.fillStyle = "#ffd56b";
+    ctx.font = "700 13px ui-sans-serif, system-ui";
+    const label = atBoss
+      ? `ACT ${this.run.act + 1} · BOSS`
+      : `ACT ${this.run.act + 1} · ROOM ${this.run.room + 1}/${act.rooms}`;
+    ctx.fillText(label, this.cssW / 2, 22);
+
+    const pct = specialChargePct(this.run);
+    const bw = 160, bh = 8, bx = this.cssW / 2 - bw / 2, by = 30;
+    ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(bx, by, bw, bh);
+    ctx.fillStyle = pct >= 1 ? "#ffd56b" : "#c77dff"; ctx.fillRect(bx, by, bw * pct, bh);
+    ctx.strokeStyle = "rgba(255,255,255,0.3)"; ctx.lineWidth = 1; ctx.strokeRect(bx, by, bw, bh);
+    if (pct >= 1) {
+      ctx.fillStyle = "#ffd56b"; ctx.font = "700 10px ui-sans-serif, system-ui";
+      ctx.fillText("SPECIAL READY (C)", this.cssW / 2, by + bh + 13);
+    }
+    if (this.run.items.length) {
+      ctx.fillStyle = "#9fd44e"; ctx.font = "600 11px ui-sans-serif, system-ui"; ctx.textAlign = "right";
+      ctx.fillText("Items " + this.run.items.length + " (X)", this.cssW - 16, 22);
+    }
+    ctx.restore();
+  }
+
   // ---------------- gates / transitions ----------------
   handleGates() {
     if (this.net.mode === "client") return; // host drives transitions
+    if (this.harvest) return; // a run advances by clearing rooms, not by gates
     for (const g of this.area.gates) {
       if (g.locked) continue;
       const r = g.rect;
@@ -2032,6 +2458,12 @@ export class Game {
     this.enemies = this.enemies.filter(
       (e) => e.state !== "dead" || e.timer > -0.5
     );
+    // harvest run: clearing every foe (and the act boss) advances the run
+    if (this.harvest && this.run && this.roomActive && this.screen === "play") {
+      const aliveEnemies = this.enemies.some((e) => e.state !== "dead");
+      const aliveBoss = this.boss && this.boss.state !== "dead";
+      if (!aliveEnemies && !aliveBoss) this.onEncounterClear();
+    }
   }
 
   // ---------------- particles / fx ----------------
@@ -2333,8 +2765,26 @@ export class Game {
         if (msg.pid === this.net.selfId) this.gainSap(msg.amt);
         break;
       }
+      case "draft": {
+        // host cleared a room — open our own boon draft (harvest co-op)
+        if (this.net.mode === "client" && this.harvest && this.run) this.openBoonDraft();
+        break;
+      }
+      case "draftdone": {
+        // a client finished drafting; advance once the host has too
+        if (this.net.mode === "host") {
+          this.coopDraftWait = Math.max(0, this.coopDraftWait - 1);
+          if (this.hostPicked && this.coopDraftWait <= 0) this.proceedAfterBoon();
+        }
+        break;
+      }
       case "bye": {
         this.others.delete(msg.id);
+        // a peer leaving mid-draft shouldn't stall the run
+        if (this.net.mode === "host" && this.coopDraftWait > 0) {
+          this.coopDraftWait--;
+          if (this.hostPicked && this.coopDraftWait <= 0) this.proceedAfterBoon();
+        }
         break;
       }
     }
@@ -3257,7 +3707,9 @@ export class Game {
       ctx.globalAlpha = 1;
     }
 
+    if (this.harvest && this.screen === "play") this.drawRunHud(ctx);
     if (this.screen === "bonfire") this.drawBonfireMenu(ctx);
+    if (this.screen === "boon") this.drawBoonDraft(ctx);
     if (this.screen === "dead") this.drawDeathScreen(ctx);
     if (this.screen === "victory") this.drawVictoryScreen(ctx);
     if (this.screen === "paused") this.drawPauseScreen(ctx);

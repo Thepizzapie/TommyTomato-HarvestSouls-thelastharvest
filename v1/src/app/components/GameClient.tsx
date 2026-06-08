@@ -31,6 +31,7 @@ export default function GameClient({ mode }: { mode: Mode }) {
   const [name, setName] = useState("Tommy");
   const [tint, setTint] = useState(PLAYER_TINTS[0]);
   const [roomCode, setRoomCode] = useState("");
+  const [harvestMode, setHarvestMode] = useState(false); // roguelite "Harvest Run" toggle
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [roster, setRoster] = useState<RosterEntry[]>([]);
@@ -61,7 +62,7 @@ export default function GameClient({ mode }: { mode: Mode }) {
   useEffect(() => () => cleanup(), [cleanup]);
 
   const startGame = useCallback(
-    (theMode: Mode, net: Net | null, profile?: SaveData) => {
+    (theMode: Mode, net: Net | null, profile?: SaveData, harvest = false) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
       const selfId = net ? net.selfId : "solo";
@@ -78,12 +79,14 @@ export default function GameClient({ mode }: { mode: Mode }) {
         {}
       );
       gameRef.current = game;
-      game.start(profile);
+      game.start(profile, harvest);
       if (process.env.NODE_ENV !== "production") (window as any).__tommy = game;
       setPhase("playing");
     },
     [name, tint]
   );
+
+  // Harvest Run launches via the harvestMode toggle (applies to solo AND co-op).
 
   const beginSolo = (fresh: boolean) => {
     if (fresh) Game.clearSave();
@@ -93,7 +96,7 @@ export default function GameClient({ mode }: { mode: Mode }) {
       profile.name = name;
       profile.tint = tint;
     }
-    startGame("solo", null, profile);
+    startGame("solo", null, profile, harvestMode);
   };
 
   const beginNet = (theMode: "host" | "client") => {
@@ -118,7 +121,7 @@ export default function GameClient({ mode }: { mode: Mode }) {
         onOpen: () => {
           if (theMode === "host") setHostCode(net.roomCode);
           // give the canvas a tick to lay out
-          requestAnimationFrame(() => startGame(theMode, net));
+          requestAnimationFrame(() => startGame(theMode, net, undefined, harvestMode));
         },
       },
       theMode === "client" ? roomCode.trim().toUpperCase() : undefined
@@ -297,6 +300,19 @@ export default function GameClient({ mode }: { mode: Mode }) {
             <div className="rule">
               <span className="rule__pip" />
             </div>
+
+            <button
+              className="btn"
+              onClick={() => setHarvestMode((v) => !v)}
+              style={
+                harvestMode
+                  ? { background: "#b3331f", color: "#fff", marginBottom: "0.6rem" }
+                  : { marginBottom: "0.6rem" }
+              }
+              title="Roguelite: a fixed gauntlet through all three bosses, with boon drafts. Works solo or co-op."
+            >
+              {harvestMode ? "🍅 Harvest Run — ON (roguelite)" : "🍅 Harvest Run — off"}
+            </button>
 
             {mode === "solo" && (
               <div className="setup-actions">
