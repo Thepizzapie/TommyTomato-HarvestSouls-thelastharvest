@@ -33,7 +33,10 @@ export interface ClipDef {
 /** One creature's set of states. Keys are state names; values are clip defs. */
 export type CreatureClips = Record<string, ClipDef>;
 
-const ANIM_ROOT = "/assets/anim";
+// Prefix with the deploy base path (CI sets NEXT_PUBLIC_BASE_PATH for GitHub
+// Pages sub-path hosting; empty for local dev / root hosting). NEXT_PUBLIC_* is
+// inlined at build time, so this resolves at build, not runtime.
+const ANIM_ROOT = `${process.env.NEXT_PUBLIC_BASE_PATH || ""}/assets/anim`;
 
 function clip(creature: string, state: string, fps: number, loop: boolean): ClipDef {
   return { url: `${ANIM_ROOT}/${creature}/${state}.json`, fps, loop };

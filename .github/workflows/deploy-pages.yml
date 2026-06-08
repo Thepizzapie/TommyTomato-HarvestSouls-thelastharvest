@@ -1,0 +1,71 @@
+name: Deploy games to GitHub Pages
+
+# Builds both versions as static sites and publishes them under one Pages site:
+#   /                -> landing page
+#   /v1/             -> Canvas2D build
+#   /v2/             -> PixiJS build
+# Each build is told its sub-path via NEXT_PUBLIC_BASE_PATH so asset + link URLs
+# resolve correctly under github.io/<repo>/v1 and /v2.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one Pages deploy at a time; newer pushes supersede in-flight ones.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build v1 (Canvas2D)
+        working-directory: v1
+        env:
+          NEXT_PUBLIC_BASE_PATH: /${{ github.event.repository.name }}/v1
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build v2 (PixiJS)
+        working-directory: v2
+        env:
+          NEXT_PUBLIC_BASE_PATH: /${{ github.event.repository.name }}/v2
+        run: |
+          npm ci
+          npm run build
+
+      - name: Assemble site (landing + v1 + v2)
+        run: |
+          rm -rf _site && mkdir -p _site
+          cp landing/index.html _site/index.html
+          touch _site/.nojekyll          # stop Jekyll from dropping Next's _next/ folder
+          cp -r v1/out _site/v1
+          cp -r v2/out _site/v2
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tommy Tomato: Harvest Souls — play v1 &amp; v2</title>
+  <meta name="description" content="A Dark-Souls-but-it's-a-tomato browser game, built twice. Play the original Canvas2D build (v1) or the PixiJS WebGL rebuild (v2)." />
+  <meta name="theme-color" content="#7f1f12" />
+  <style>
+    :root { --red:#b6311d; --red-deep:#7f1f12; --gold:#e6a019; --ink:#1a0c08; --cream:#f7ead2; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; color: var(--cream);
+      font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background:
+        radial-gradient(120% 90% at 80% -10%, #d8492c55, transparent 60%),
+        linear-gradient(160deg, #2a0e08, #120705 70%);
+      display: grid; place-items: center; padding: 2rem 1.25rem;
+    }
+    .wrap { width: min(100%, 880px); text-align: center; }
+    .eyebrow { color: var(--gold); font-weight: 700; letter-spacing: .2em; text-transform: uppercase; font-size: .8rem; margin: 0 0 1rem; }
+    h1 { font-size: clamp(2.4rem, 1.5rem + 5vw, 4.5rem); line-height: .95; margin: 0; letter-spacing: -.02em; }
+    h1 .tomato { color: var(--red); }
+    .sub { color: #e8d6b8cc; font-size: clamp(1rem, .95rem + .4vw, 1.2rem); max-width: 40rem; margin: 1rem auto 2.5rem; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.25rem; }
+    .card {
+      display: block; text-decoration: none; color: inherit; text-align: left;
+      background: #ffffff0d; border: 1px solid #ffffff1f; border-radius: 18px; padding: 1.6rem;
+      transition: transform .15s, border-color .2s, background .2s;
+    }
+    .card:hover { transform: translateY(-4px); border-color: var(--gold); background: #ffffff14; }
+    .card .ver { font-size: .78rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--gold); }
+    .card h2 { margin: .3rem 0 .5rem; font-size: 1.5rem; }
+    .card p { margin: 0 0 1.2rem; color: #e8d6b8b3; font-size: .96rem; }
+    .play { display: inline-flex; align-items: center; gap: .5rem; font-weight: 700; color: var(--cream); background: var(--red); padding: .6rem 1.1rem; border-radius: 999px; }
+    .card:hover .play { background: var(--red-deep); }
+    .foot { margin-top: 2.5rem; color: #e8d6b87a; font-size: .85rem; }
+    .foot a { color: var(--gold); }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <p class="eyebrow">🍅 A soulslike, but you're a tomato</p>
+    <h1>Tommy <span class="tomato">Tomato</span><br />Harvest Souls</h1>
+    <p class="sub">A tomato that ripened at the worst possible moment. Roll, parry, backstab and ripen your way through the agricultural hellscape — solo or in peer-to-peer co-op. Built twice; play either.</p>
+
+    <div class="cards">
+      <a class="card" href="v2/">
+        <span class="ver">v2 · the Walmart version</span>
+        <h2>Play the WebGL build</h2>
+        <p>The glow-up: PixiJS renderer, hand-painted animated sprites, dynamic lighting, particles, controller support. Start here.</p>
+        <span class="play">Enter the Rows →</span>
+      </a>
+      <a class="card" href="v1/">
+        <span class="ver">v1 · the Temu version</span>
+        <h2>Play the original</h2>
+        <p>The one-shot Canvas2D build — everything procedural, no binary assets. Same soulslike loop, scrappier coat of paint.</p>
+        <span class="play">Play v1 →</span>
+      </a>
+    </div>
+
+    <p class="foot">Both run fully in your browser. Co-op signaling uses the public PeerJS cloud — no server required. ·
+      <a href="https://github.com/Thepizzapie/TommyTomato-HarvestSouls-thelastharvest">Source on GitHub</a></p>
+  </main>
+</body>
+</html>
