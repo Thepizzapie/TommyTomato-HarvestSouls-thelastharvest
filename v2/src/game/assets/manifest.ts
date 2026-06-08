@@ -140,19 +140,23 @@ export type VfxName = keyof typeof VFX_MANIFEST;
 // scale is ~72/534 ~= 0.135 of a cell... but the subject only fills part of the
 // cell, so the brief's calibration of ~0.045 for the player (subject ~ a third
 // of the cell) is the baseline. Bosses are larger. All values are tunable.
+// Source atlases were downscaled to cut VRAM ~10x (scripts/shrink-pack.mjs:
+// creatures/vfx x1/3, bosses x2/3). These render scales are bumped to
+// compensate (creatures x3, bosses x1.5) so on-screen sizes are unchanged.
 export const BASE_SCALE: Record<Creature, number> = {
-  player: 0.18,
-  grub: 0.11, // small crawler
-  weed: 0.15, // rooted, mid-height
-  drone: 0.135, // hovering, small-to-mid
-  hornet: 0.105, // small flyer
-  king: 0.85, // scarecrow king boss — towering
-  oldtom: 0.9, // final-form tomato boss — towering
-  harvester: 1.05, // hulking machine boss — largest
+  player: 0.54,
+  grub: 0.33, // small crawler
+  weed: 0.45, // rooted, mid-height
+  drone: 0.405, // hovering, small-to-mid
+  hornet: 0.315, // small flyer
+  king: 1.275, // scarecrow king boss — towering
+  oldtom: 1.35, // final-form tomato boss — towering
+  harvester: 1.575, // hulking machine boss — largest
 };
 
-/** Default scale for one-shot VFX sprites (tunable per call site). */
-export const VFX_BASE_SCALE = 0.05;
+/** Default scale for one-shot VFX sprites (tunable per call site).
+ *  x3 to compensate for the 1/3 atlas downscale (see BASE_SCALE note). */
+export const VFX_BASE_SCALE = 0.15;
 
 /** Flat list of every clip URL (creature + vfx), handy for preloading. */
 export function allClipUrls(): string[] {
